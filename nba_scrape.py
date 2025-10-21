@@ -20,6 +20,7 @@ import collections
 import datetime
 import json
 import io
+import nba_api.stats.endpoints
 import pandas as pd
 import re
 import requests
@@ -345,6 +346,146 @@ def parse_schedule_row (row, season, division_lookup, franchise_lookup, postseas
 	# Return the data structure with the row
 	return row_data
 
+# For now, this is just used to parse preseason data from the NBA API
+def parse_api_schedule_row (row, season, division_lookup, franchise_lookup, league_id):
+	# Store data about the franchises and teams in the data structure about the game, mostly using data from the division data and the franchise table
+	row_data = {}
+	row_data['Season'] = season
+	# Check if the label is set for a preseason game
+	if row['gameLabel'].strip() == 'Preseason':
+		row_data['IsPreseason'] = True
+		row_data['IsPostseason'] = False
+	# The label is empty for a regular season game
+	elif len(row['gameLabel'].strip()) == 0:
+		row_data['IsPreseason'] = False
+		row_data['IsPostseason'] = False
+	# Assume if the label isn't 'Preseason' or an empty string, it's postseason, but I'll need to investigate this more later on
+	else:
+		row_data['IsPreseason'] = False
+		row_data['IsPostseason'] = True
+	row_data['WeekString'] = row['weekName']
+	row_data['Week'] = row['weekNumber']
+	row_data['Venue'] = row['arenaName']
+	# I'll need to see if I can get this data from elsewhere, but set it to None for now
+	row_data['Attendance'] = None
+	row_data['Notes'] = None
+	row_data['OvertimeStatus'] = None
+	row_data['GameLengthString'] = None
+	row_data['Overtime'] = None
+	row_data['IsNeutralSite'] = row['isNeutral']
+	# Don't include scores from games in progress, only if they're completed (I assume gameStatus 1 = scheduled, 2 = in progress, 3 = finished)
+	if row['gameStatus'] == 3:
+		row_data['IsCompleted'] = True
+		row_data['AwayScore'] = row['awayTeam']['score']
+		row_data['HomeScore'] = row['homeTeam']['score']
+	else:
+		row_data['IsCompleted'] = False
+		row_data['AwayScore'] = None
+		row_data['HomeScore'] = None
+	try:
+		game_date_parse = datetime.datetime.strptime(row['gameDateEst'].split('T')[0].strip(), '%Y-%m-%d')
+		game_year = game_date_parse.year
+		game_month = game_date_parse.month
+		game_day = game_date_parse.day
+		epoch_day = (datetime.date(game_year, game_month, game_day) - datetime.date(1970, 1, 1)).days
+	except:
+		game_year = None
+		game_month = None
+		game_day = None
+		epoch_day = None
+	row_data['Year'] = game_year
+	row_data['Month'] = game_month
+	row_data['Day'] = game_day
+	row_data['EpochDay'] = epoch_day
+	# Update this to include more leagues like the ABA
+	if league_id == '00':
+		if season >= 1950:
+			league = 'NBA'
+		else:
+			league = 'BAA'
+	else:
+		league = None
+	row_data['League'] = league
+
+	# Try to match the home team with the franchise table
+	input_id = row['homeTeam']['teamTricode']
+	input_name = row['homeTeam']['teamCity'].strip() + ' ' + row['homeTeam']['teamName'].strip()
+	cur_franchise = None
+	if cur_franchise is None:
+		franchise_data = [x for x in franchise_lookup if ((x['Season'] == season) and (x['TeamID'] == input_id))]
+		if len(franchise_data) > 0:
+			cur_franchise = franchise_data[0]
+	if cur_franchise is None:
+		franchise_data = [x for x in franchise_lookup if ((x['Season'] == season) and (x['FranchiseID'] == input_id))]
+		if len(franchise_data) > 0:
+			cur_franchise = franchise_data[0]
+	if cur_franchise is None:
+		franchise_data = [x for x in franchise_lookup if ((x['Season'] == season) and (x['TeamName'] == input_name))]
+		if len(franchise_data) > 0:
+			cur_franchise = franchise_data[0]
+	if cur_franchise is None:
+		franchise_data = [x for x in franchise_lookup if ((x['Season'] == season) and (x['FranchiseName'] == input_name))]
+		if len(franchise_data) > 0:
+			cur_franchise = franchise_data[0]
+	if cur_franchise is not None:
+		row_data['HomeID'] = cur_franchise['FranchiseID']
+		row_data['HomeTeamID'] = cur_franchise['TeamID']
+		row_data['HomeFranchiseName'] = cur_franchise['FranchiseName']
+		row_data['HomeName'] = cur_franchise['TeamName']
+	else:
+		row_data['HomeID'] = None
+		row_data['HomeTeamID'] = input_id
+		row_data['HomeFranchiseName'] = input_name
+		row_data['HomeName'] = None
+
+	# Try to match the away team with the franchise table
+	input_id = row['awayTeam']['teamTricode']
+	input_name = row['awayTeam']['teamCity'].strip() + ' ' + row['awayTeam']['teamName'].strip()
+	cur_franchise = None
+	if cur_franchise is None:
+		franchise_data = [x for x in franchise_lookup if ((x['Season'] == season) and (x['TeamID'] == input_id))]
+		if len(franchise_data) > 0:
+			cur_franchise = franchise_data[0]
+	if cur_franchise is None:
+		franchise_data = [x for x in franchise_lookup if ((x['Season'] == season) and (x['FranchiseID'] == input_id))]
+		if len(franchise_data) > 0:
+			cur_franchise = franchise_data[0]
+	if cur_franchise is None:
+		franchise_data = [x for x in franchise_lookup if ((x['Season'] == season) and (x['TeamName'] == input_name))]
+		if len(franchise_data) > 0:
+			cur_franchise = franchise_data[0]
+	if cur_franchise is None:
+		franchise_data = [x for x in franchise_lookup if ((x['Season'] == season) and (x['FranchiseName'] == input_name))]
+		if len(franchise_data) > 0:
+			cur_franchise = franchise_data[0]
+	if cur_franchise is not None:
+		row_data['AwayID'] = cur_franchise['FranchiseID']
+		row_data['AwayTeamID'] = cur_franchise['TeamID']
+		row_data['AwayFranchiseName'] = cur_franchise['FranchiseName']
+		row_data['AwayName'] = cur_franchise['TeamName']
+	else:
+		row_data['AwayID'] = None
+		row_data['AwayTeamID'] = input_id
+		row_data['AwayFranchiseName'] = input_name
+		row_data['AwayName'] = None
+
+	# Set conferences and divisions
+	if list(division_lookup.keys()).count(row_data['HomeTeamID']) > 0:
+		row_data['HomeConference'] = division_lookup[row_data['HomeTeamID']]['Conference']
+		row_data['HomeDivision'] = division_lookup[row_data['HomeTeamID']]['Division']
+	else:
+		row_data['HomeConference'] = None
+		row_data['HomeDivision'] = None
+	if list(division_lookup.keys()).count(row_data['AwayTeamID']) > 0:
+		row_data['AwayConference'] = division_lookup[row_data['AwayTeamID']]['Conference']
+		row_data['AwayDivision'] = division_lookup[row_data['AwayTeamID']]['Division']
+	else:
+		row_data['AwayConference'] = None
+		row_data['AwayDivision'] = None
+
+	# Return the result
+	return row_data
+
 def main ():
 	# Get the parameters from the command line
 	if len(sys.argv) < 5:
@@ -372,6 +513,7 @@ def main ():
 	for current_season in range(start_season, end_season + 1, 1):
 		franchise_lookup = [x for x in franchise_data if x['Season'] == current_season]
 		season_fail = False
+		api_nba_schedule_json = None
 		season_tables = []
 		aba_season_tables = []
 		# Distinguish between the NBA and BAA name when requesting standings
@@ -398,6 +540,9 @@ def main ():
 				season_url = (('https://www.basketball-reference.com/leagues/BAA_%d_games.html') % (current_season))
 			season_page = retrieve_page(season_url)
 			time.sleep(request_delay)
+			# Pull the stats data from the NBA API, using one season earlier because the API year is one earlier than Basketball Reference uses in URLs
+			api_nba_schedule = nba_api.stats.endpoints.ScheduleLeagueV2(season = current_season - 1)
+			api_nba_schedule_json = json.loads(api_nba_schedule.get_json())
 			# Schedules on Basketball Reference are split into monthly pages, so get all the URLs that need to be loaded to obtain a full schedule
 			if season_page is None:
 				season_fail = True
@@ -491,6 +636,13 @@ def main ():
 		# If we can't download the season table, issue a warning, but still try to parse the season
 		if season_fail:
 			warnings.warn(('Error downloading data for season %d') % (current_season))
+		# Try to parse NBA preseason data
+		if api_nba_schedule_json is not None:
+			for game_date_structure in api_nba_schedule_json['leagueSchedule']['gameDates']:
+				for game_row in game_date_structure['games']:
+					if game_row['gameLabel'] == 'Preseason':
+						game_count = game_count + 1
+						game_data[game_count] = parse_api_schedule_row(game_row, current_season, division_lookup, franchise_lookup, api_nba_schedule_json['leagueSchedule']['leagueId'])
 		# Try to parse NBA/BAA data
 		if len(season_tables) > 0:
 			for season_table in season_tables:
